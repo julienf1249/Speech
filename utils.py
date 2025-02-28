@@ -8,6 +8,7 @@ import pickle
 import librosa
 import torch
 import torchgmm.bayes as bayes
+import random
 
 def group_samples_by_speaker(input_dataset):
     """
@@ -32,18 +33,21 @@ def create_balanced_duration_dataset_from_groups(speaker_to_samples, target_dura
 
     Parameters:
       - speaker_to_samples: A dictionary mapping speaker_id to lists of samples.
-      - target_duration: Desired total duration in seconds (e.g., 3600 for 1h, 18000 for 5h).
+      - target_duration: Desired total duration in seconds.
 
     Returns:
       - A new Hugging Face Dataset containing the selected samples.
     """
     # Initialize pointers for each speaker group.
+
+      # Fixer la seed localement pour creer des datasets differents 
+
     pointers = {spk: 0 for spk in speaker_to_samples}
     selected_samples = []
     total_duration = 0.0
 
     # Get a sorted list of speaker IDs (you can randomize this order if desired).
-    speaker_ids = sorted(speaker_to_samples.keys())
+    speaker_ids = random.sample(list(speaker_to_samples.keys()), len(speaker_to_samples))
 
     # Round-robin selection loop.
     while total_duration < target_duration:
@@ -79,6 +83,48 @@ def create_balanced_duration_dataset_from_groups(speaker_to_samples, target_dura
     # Create a new Hugging Face Dataset from the selected samples.
     new_dataset = datasets.Dataset.from_list(selected_samples)
     return new_dataset
+
+# Initialisation globale (à l'extérieur des fonctions)
+
+
+def create_balanced_dataset(speaker_to_samples,pointers,target_duration=3600, shuffle=True):
+    """
+    Crée un dataset avec des échantillons non utilisés précédemment.
+    Les locuteurs peuvent être réutilisés, mais pas les mêmes échantillons.
+    """
+    """global pointers  # Utilise le dictionnaire externe"""
+    
+    selected_samples = []
+    total_duration = 0.0
+    
+    # 1. Mélanger l'ordre des locuteurs à chaque appel
+    speaker_ids = list(speaker_to_samples.keys())
+
+    
+    # 2. Parcours circulaire des locuteurs
+    while total_duration < target_duration:
+        for spk in speaker_ids:
+            # 3. Récupérer le prochain échantillon non utilisé
+            idx = pointers[spk]
+            if idx >= len(speaker_to_samples[spk]):
+                continue  # Locuteur épuisé
+                
+            sample = speaker_to_samples[spk][idx]
+            pointers[spk] += 1  # Mise à jour globale
+            
+            # 4. Vérifier la durée
+            sr = sample["audio"]["sampling_rate"]
+            duration = len(sample["audio"]["array"]) / sr
+            if (total_duration + duration) > target_duration:
+                continue
+                
+            selected_samples.append(sample)
+            total_duration += duration
+            
+            if total_duration >= target_duration:
+                break
+    
+    return datasets.Dataset.from_list(selected_samples)
 
 
 def compute_mfcc(audio_array, sample_rate, n_mfcc=13, n_fft=400, hop_length=160):
